@@ -1,0 +1,28 @@
+{
+  "name": "opencode-project-guard",
+  "version": "0.2.0",
+  "description": "OpenCode plugin: refuses file and shell writes into another project's territory",
+  "author": "rojosinalma",
+  "license": "MIT",
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "test": "bun test"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "ai-agents",
+    "guardrails",
+    "security",
+    "monorepo"
+  ],
+  "homepage": "https://github.com/rojosinalma/opencode-project-guard",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rojosinalma/opencode-project-guard"
+  },
+  "devDependencies": {
+    "@opencode/plugin": "2.0.30"
+  }
+}
