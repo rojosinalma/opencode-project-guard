@@ -17,13 +17,31 @@ import * as path from "node:path"
 //   - any internal fault logs `[project-guard] …` and lets the call through.
 
 export type Guard = { owner: string; paths: string[]; message?: string }
-export type Options = { guards: Guard[]; debug: boolean }
+
+// A rule is a pattern check on what a tool call carries (the shell command, the written path or
+// content, Code Mode code, …). `refuse` throws before the call runs; `warn` lets it run and appends
+// the message to the tool result. Rules are independent of guards and apply to any tool they list.
+export type RuleKind = "refuse" | "warn"
+export type RuleField = "command" | "path" | "content" | "code" | "name" | "input"
+export type Rule = {
+  id: string
+  kind: RuleKind
+  tools: string[]
+  match: RegExp[]
+  except?: RegExp[]
+  on?: RuleField[]
+  message: string
+  allow_from?: string[]
+  unless_turn_tool?: string
+}
+export type Options = { guards: Guard[]; rules: Rule[]; debug: boolean }
 
 // No guards by default: every guard comes from `options.guards`.
 export const DEFAULT_GUARDS: Guard[] = []
 
 export const FILE_TOOLS = new Set(["edit", "write", "patch"])
 export const SHELL_TOOLS = new Set(["shell", "bash"])
+export const RULE_FIELDS: ReadonlySet<string> = new Set<RuleField>(["command", "path", "content", "code", "name", "input"])
 
 export function expandHome(p: string): string {
   if (p === "~") return os.homedir()
@@ -31,7 +49,63 @@ export function expandHome(p: string): string {
   return p
 }
 
-export function resolveOptions(raw: Readonly<Record<string, any>> = {}): Options {
+// `/body/flags` becomes `new RegExp(body, flags)`; anything else is a plain pattern with no flags.
+// Returns undefined for an invalid pattern.
+export function parseRegex(s: string): RegExp | undefined {
+  const m = /^\/([\s\S]+)\/([a-z]*)$/.exec(s)
+  try {
+    return m ? new RegExp(m[1], m[2]) : new RegExp(s)
+  } catch {
+    return undefined
+  }
+}
+
+function regexList(v: unknown): RegExp[] | undefined {
+  const items = typeof v === "string" ? [v] : Array.isArray(v) ? v : undefined
+  if (!items) return undefined
+  const out: RegExp[] = []
+  for (const item of items) {
+    if (typeof item !== "string") return undefined
+    const re = parseRegex(item)
+    if (!re) return undefined
+    out.push(re)
+  }
+  return out
+}
+
+// Validate one raw rule; the reason string explains a drop.
+export function resolveRule(raw: any): { rule?: Rule; reason?: string } {
+  if (!raw || typeof raw !== "object") return { reason: "not an object" }
+  if (typeof raw.id !== "string" || raw.id.length === 0) return { reason: "missing id" }
+  const id: string = raw.id
+  if (!Array.isArray(raw.tools) || raw.tools.length === 0 || !raw.tools.every((t: unknown) => typeof t === "string" && t.length > 0)) return { reason: `rule ${id}: tools must be a non-empty list of names` }
+  if (typeof raw.message !== "string" || raw.message.length === 0) return { reason: `rule ${id}: missing message` }
+  const kind: RuleKind = raw.kind === undefined ? "refuse" : raw.kind
+  if (kind !== "refuse" && kind !== "warn") return { reason: `rule ${id}: kind must be "refuse" or "warn"` }
+  const match = regexList(raw.match)
+  if (!match || match.length === 0) return { reason: `rule ${id}: match must be a valid regex or list of regexes` }
+  const rule: Rule = { id, kind, tools: [...raw.tools], match, message: raw.message }
+  if (raw.except !== undefined) {
+    const except = regexList(raw.except)
+    if (!except) return { reason: `rule ${id}: except must be a valid regex or list of regexes` }
+    rule.except = except
+  }
+  if (raw.on !== undefined) {
+    if (!Array.isArray(raw.on) || raw.on.length === 0 || !raw.on.every((f: unknown) => typeof f === "string" && RULE_FIELDS.has(f))) return { reason: `rule ${id}: on must list fields out of ${[...RULE_FIELDS].join("|")}` }
+    rule.on = [...raw.on]
+  }
+  if (raw.allow_from !== undefined) {
+    if (!Array.isArray(raw.allow_from) || !raw.allow_from.every((d: unknown) => typeof d === "string")) return { reason: `rule ${id}: allow_from must be a list of directories` }
+    rule.allow_from = raw.allow_from.map(expandHome)
+  }
+  if (raw.unless_turn_tool !== undefined) {
+    if (typeof raw.unless_turn_tool !== "string" || raw.unless_turn_tool.length === 0) return { reason: `rule ${id}: unless_turn_tool must be a tool name` }
+    rule.unless_turn_tool = raw.unless_turn_tool
+  }
+  return { rule }
+}
+
+export function resolveOptions(raw: Readonly<Record<string, any>> = {}, warn: (msg: string) => void = (m) => console.error(`[project-guard] ${m}`)): Options {
   const rawGuards = Array.isArray(raw.guards) ? (raw.guards as Guard[]) : DEFAULT_GUARDS
   const guards = rawGuards
     .filter((g) => g && typeof g.owner === "string" && Array.isArray(g.paths))
@@ -40,7 +114,14 @@ export function resolveOptions(raw: Readonly<Record<string, any>> = {}): Options
       paths: g.paths.filter((p) => typeof p === "string").map(expandHome),
       ...(typeof g.message === "string" && g.message.length > 0 ? { message: g.message } : {}),
     }))
-  return { guards, debug: raw.debug === true }
+  const rules: Rule[] = []
+  if (raw.rules !== undefined && !Array.isArray(raw.rules)) warn("options.rules must be an array, ignoring it")
+  for (const r of Array.isArray(raw.rules) ? raw.rules : []) {
+    const { rule, reason } = resolveRule(r)
+    if (rule) rules.push(rule)
+    else warn(`dropping invalid rule (${reason})`)
+  }
+  return { guards, rules, debug: raw.debug === true }
 }
 
 // Canonical absolute form: realpath when the path (or its nearest existing ancestor) exists, so a
@@ -380,30 +461,188 @@ export function decide(opts: Options, directory: string, tool: string, input: un
   return decideFull(opts, directory, tool, input)?.message
 }
 
+// --- rules -------------------------------------------------------------------------------------
+
+// What a rule's patterns are tested against, per tool. Only fields that exist are returned.
+export function subjectsOf(tool: string, input: unknown, directory: string): Partial<Record<RuleField, string>> {
+  const inp = input && typeof input === "object" ? (input as Record<string, unknown>) : {}
+  if (SHELL_TOOLS.has(tool)) {
+    const command = str(inp.command)
+    if (!command) return {}
+    const workdir = str(inp.workdir)
+    return { command: workdir ? `cd ${workdir} && ${command}` : command }
+  }
+  if (FILE_TOOLS.has(tool)) {
+    const out: Partial<Record<RuleField, string>> = {}
+    const targets = targetsOf(tool, input, directory)
+    if (targets.length) out.path = targets.join("\n")
+    const content = str(inp.content) ?? str(inp.newString) ?? str(inp.patchText) ?? str(inp.patch)
+    if (content) out.content = content
+    return out
+  }
+  if (tool === "execute") {
+    const code = str(inp.code)
+    return code ? { code } : {}
+  }
+  return { name: tool, input: JSON.stringify(input) ?? "" }
+}
+
+export type RuleHit = { rule: Rule; field: RuleField; match: string; tool: string }
+
+// First counting match of `rule` in the subjects: a match whose text is covered by an `except`
+// pattern is skipped. Regexes are copied with the `g` flag so the configured objects keep no state.
+export function firstMatch(rule: Rule, subjects: Partial<Record<RuleField, string>>): { field: RuleField; match: string } | undefined {
+  const fields = (rule.on ?? (Object.keys(subjects) as RuleField[])).filter((f) => subjects[f] !== undefined)
+  for (const field of fields) {
+    const text = subjects[field]!
+    for (const re of rule.match) {
+      const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g")
+      for (const m of text.matchAll(g)) {
+        const hit = m[0]
+        if (rule.except?.some((ex) => ex.test(hit))) continue
+        return { field, match: hit }
+      }
+    }
+  }
+}
+
+// Every rule hit for a tool call: rule lists the tool, the session is not under an `allow_from`
+// root, and a pattern matched. `unless_turn_tool` is not evaluated here (it needs the session).
+export function decideRules(opts: Options, directory: string, tool: string, input: unknown): RuleHit[] {
+  const hits: RuleHit[] = []
+  const rules = opts.rules.filter((r) => r.tools.includes(tool))
+  if (rules.length === 0) return hits
+  const subjects = subjectsOf(tool, input, directory)
+  for (const rule of rules) {
+    if (rule.allow_from?.some((root) => isUnder(directory, root))) continue
+    const m = firstMatch(rule, subjects)
+    if (m) hits.push({ rule, field: m.field, match: m.match, tool })
+  }
+  return hits
+}
+
+export function ruleText(hit: RuleHit, directory: string): string {
+  const { rule, field, match, tool } = hit
+  const vars: Record<string, string> = { id: rule.id, tool, match, directory, subject: field }
+  const message = rule.message.replace(/\{(id|tool|match|directory|subject)\}/g, (_m, k: string) => vars[k] ?? "")
+  return `[project-guard] rule \`${rule.id}\` ${rule.kind === "refuse" ? "refused" : "warning for"} \`${tool}\`: matched "${match}" in ${field}. ${message}`
+}
+
+type ContextPart = { type: string; name?: string; state?: { status?: string } }
+type ContextMessage = { id: string; type: string; content?: ContextPart[] }
+
+// Whether the turn that `messageID` belongs to (that message and every message back to, not
+// including, the previous user message) carries a completed tool part named `toolName`.
+// Undefined when the message is not in the context.
+export function turnHasCompletedTool(messages: ContextMessage[], messageID: string, toolName: string): boolean | undefined {
+  const idx = messages.findIndex((m) => m.id === messageID)
+  if (idx < 0) return undefined
+  for (let i = idx; i >= 0; i--) {
+    const m = messages[i]
+    if (i !== idx && m.type === "user") break
+    for (const part of m.content ?? []) {
+      if (part.type === "tool" && part.name === toolName && part.state?.status === "completed") return true
+    }
+  }
+  return false
+}
+
+type TextBlock = { type: "text"; text: string }
+type HookResult = { content?: string | unknown[]; output?: unknown; [k: string]: unknown }
+
+// Same shape as the diagnostics plugin: text content becomes a block list, an array gets a block
+// appended, otherwise the serialised output is the first block.
+export function appendText(result: HookResult, text: string): HookResult {
+  const block: TextBlock = { type: "text", text }
+  if (typeof result.content === "string") return { ...result, content: [{ type: "text", text: result.content }, block] }
+  if (Array.isArray(result.content)) return { ...result, content: [...result.content, block] }
+  const output = result.output === undefined ? [] : [{ type: "text" as const, text: JSON.stringify(result.output) }]
+  return { ...result, content: [...output, block] }
+}
+
 const plugin: Plugin.Plugin = {
   id: "project-guard",
   async setup(ctx) {
-    const opts = resolveOptions(ctx.options)
     const log = (msg: string) => console.error(`[project-guard] ${msg}`)
+    const opts = resolveOptions(ctx.options, log)
     const directory: string = ctx.location?.directory ?? process.cwd()
+    const describe = (error: unknown) => (error instanceof Error ? (error.stack ?? error.message) : String(error))
+    const hasRules = opts.rules.length > 0
+    const hasWarnRules = opts.rules.some((r) => r.kind === "warn")
+
+    // Drops the hits whose `unless_turn_tool` is satisfied. The session context is read only when a
+    // hit carries that condition; a failed lookup passes the rule (fail open).
+    const applyTurnCondition = async (hits: RuleHit[], sessionID: string, messageID: string): Promise<RuleHit[]> => {
+      if (!hits.some((h) => h.rule.unless_turn_tool)) return hits
+      let messages: ContextMessage[] | undefined
+      try {
+        messages = (await ctx.session.context({ sessionID })) as unknown as ContextMessage[]
+      } catch (error) {
+        log(`context lookup failed for ${sessionID}: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      return hits.filter((h) => {
+        const tool = h.rule.unless_turn_tool
+        if (!tool) return true
+        const has = Array.isArray(messages) ? turnHasCompletedTool(messages, messageID, tool) : undefined
+        if (has === undefined) {
+          log(`rule ${h.rule.id}: turn-tool check unavailable, passing`)
+          return false
+        }
+        return !has
+      })
+    }
 
     await ctx.tool.hook("execute.before", async (event) => {
-      if (!FILE_TOOLS.has(event.tool) && !SHELL_TOOLS.has(event.tool)) return
+      const guarded = FILE_TOOLS.has(event.tool) || SHELL_TOOLS.has(event.tool)
+      if (!guarded && !hasRules) return
       // Anything unexpected in here lets the call through; only the deliberate refusal throws.
       let verdict: Decision
+      let refusal: RuleHit | undefined
       try {
-        verdict = decideFull(opts, directory, event.tool, event.input)
-        if (!verdict && opts.debug) {
-          const targets = targetsOf(event.tool, event.input, directory)
-          log(`allowed ${event.tool} ${targets.join(",") || "-"} from ${directory}`)
+        if (guarded) {
+          verdict = decideFull(opts, directory, event.tool, event.input)
+          if (!verdict && opts.debug) {
+            const targets = targetsOf(event.tool, event.input, directory)
+            log(`allowed ${event.tool} ${targets.join(",") || "-"} from ${directory}`)
+          }
+        }
+        if (!verdict && hasRules) {
+          const hits = decideRules(opts, directory, event.tool, event.input).filter((h) => h.rule.kind === "refuse")
+          refusal = (await applyTurnCondition(hits, event.sessionID, event.messageID))[0]
+          if (!refusal && opts.debug) log(`allowed ${event.tool} (rules: ${hits.length ? "matched but conditionally passed" : "none matched"})`)
         }
       } catch (error) {
-        log(`internal failure, letting ${event.tool} through: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`)
+        log(`internal failure, letting ${event.tool} through: ${describe(error)}`)
         return
       }
       if (verdict) {
         log(`refused ${event.tool} ${verdict.target} from ${directory} (owner ${verdict.owner}, session ${event.sessionID})`)
         throw new Error(verdict.message)
+      }
+      if (refusal) {
+        log(`refused ${event.tool} by rule ${refusal.rule.id} from ${directory} (session ${event.sessionID})`)
+        throw new Error(ruleText(refusal, directory))
+      }
+    })
+
+    if (!hasWarnRules) return
+    await ctx.tool.hook("execute.after", async (event) => {
+      if (event.status !== "completed") return
+      try {
+        const hits = decideRules(opts, directory, event.tool, event.input).filter((h) => h.rule.kind === "warn")
+        const warnings = await applyTurnCondition(hits, event.sessionID, event.messageID)
+        if (warnings.length === 0) {
+          if (opts.debug && hits.length === 0) log(`allowed ${event.tool} (rules: none matched)`)
+          return
+        }
+        let result = event.result as HookResult
+        for (const hit of warnings) {
+          result = appendText(result, ruleText(hit, directory))
+          log(`warned ${event.tool} by rule ${hit.rule.id} from ${directory}`)
+        }
+        event.result = result as typeof event.result
+      } catch (error) {
+        log(`internal failure, letting ${event.tool} through: ${describe(error)}`)
       }
     })
   },

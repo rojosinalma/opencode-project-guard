@@ -8,8 +8,11 @@ An [OpenCode](https://opencode.ai) plugin that refuses file and shell writes int
 territory. A guard names an *owner* directory and the *paths* it owns; a session rooted under the
 owner passes, every other session gets a refusal when `edit`/`write`/`patch` target a guarded path or
 a shell command would write there. Reads always pass, and when the shell parser is unsure the call
-passes too — false negatives are acceptable, false positives are not. Any internal fault is logged and
-lets the call through, so the guard can never break a session.
+passes too — false negatives are acceptable, false positives are not. Next to guards, *rules* match
+regular expressions against a tool call's command, paths, written content or Code Mode code and
+either refuse the call or let it run with a warning appended, so a house rule can be enforced by code
+instead of by prose. Any internal fault is logged and lets the call through, so the guard can never
+break a session.
 
 Configuration and design are documented in [docs/](docs/).
 
@@ -41,6 +44,23 @@ git clone https://github.com/rojosinalma/opencode-project-guard ~/.config/openco
             // optional: replaces the generic "what to do instead" part of the refusal
             "message": "Infra is changed only from ~/dev/infra. Describe what you need to the user instead."
           }
+        ],
+        "rules": [
+          {
+            "id": "no-self-upgrade",
+            "tools": ["shell", "bash"],
+            "match": ["/\\bopencode\\s+upgrade\\b/i"],
+            "message": "The opencode binary is updated by the release pipeline. Report to the user instead."
+          },
+          {
+            "id": "compose-reminder",
+            "kind": "warn",
+            "tools": ["edit", "write", "patch"],
+            "on": ["path"],
+            "match": ["/(^|\\/)(docker-)?compose[\\w.-]*\\.ya?ml$/m"],
+            "allow_from": ["~/dev/infra"],
+            "message": "If this service is managed by the service orchestrator, change it through its API instead."
+          }
         ]
       }
     }
@@ -48,7 +68,7 @@ git clone https://github.com/rojosinalma/opencode-project-guard ~/.config/openco
 }
 ```
 
-Without `guards` the plugin loads and does nothing. All options are described in
+Without `guards` or `rules` the plugin loads and does nothing. All options are described in
 [docs/configuration.md](docs/configuration.md).
 
 ## Usage
@@ -64,6 +84,14 @@ the owner that asks to edit `~/dev/dns/zones.yaml` gets a tool error such as
 and the same line lands on the OpenCode server's stderr. Set `guards[].message` to tell the model
 what to do instead (which API to call, where to file a request), and `"debug": true` to log allowed
 calls as well.
+
+Rules are checked after the guards. A refuse rule fails the call with the rule's message; a warn rule
+lets it run and appends the message to the tool's result. `opencode upgrade` with the rule above gives
+
+```
+[project-guard] rule `no-self-upgrade` refused `shell`: matched "opencode upgrade" in command. The
+opencode binary is updated by the release pipeline. Report to the user instead.
+```
 
 ## Development
 

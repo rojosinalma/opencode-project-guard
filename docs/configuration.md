@@ -15,6 +15,14 @@ All options live in the plugin's `plugins[]` entry in `opencode.jsonc`:
             "message": "Infra is changed only from {owner}. Describe what you need to the user instead."
           }
         ],
+        "rules": [
+          {
+            "id": "no-self-upgrade",
+            "tools": ["shell", "bash"],
+            "match": ["/\\bopencode\\s+upgrade\\b/i"],
+            "message": "The opencode binary is updated by the release pipeline. Report to the user instead."
+          }
+        ],
         "debug": false
       }
     }
@@ -26,11 +34,14 @@ All options live in the plugin's `plugins[]` entry in `opencode.jsonc`:
 
 | key | default | meaning |
 |---|---|---|
-| `guards` | `[]` (plugin inert) | list of `{ owner, paths, message? }`; `~` expands in `owner` and `paths` |
+| `guards` | `[]` | list of `{ owner, paths, message? }`; `~` expands in `owner` and `paths` |
 | `guards[].owner` | — | directory of the owning project; a session whose root is under it is never blocked by this guard |
 | `guards[].paths` | — | directories the guard protects; a target equal to or below any of them is guarded |
 | `guards[].message` | generic text | protocol appended to the refusal; `{owner}`, `{target}`, `{tool}`, `{directory}` are substituted |
-| `debug` | `false` | log every decision (allowed calls too), not only refusals |
+| `rules` | `[]` | list of pattern rules, see [Rules](#rules) |
+| `debug` | `false` | log every decision (allowed calls too), not only refusals and warnings |
+
+With neither `guards` nor `rules` the plugin is inert.
 
 Guards are validated when the plugin loads: an entry without a string `owner` or an array `paths` is
 dropped, non-string entries in `paths` are ignored, and an empty `message` falls back to the generic
@@ -54,17 +65,139 @@ where `<message>` is the guard's `message` or, when none is set:
 Use `message` to tell the model the concrete protocol for your setup (which API to call, where to
 file a request, who decides).
 
+## Rules
+
+A rule matches regular expressions against the *subject fields* of a tool call and either refuses
+the call or lets it run with a warning. Guards are evaluated first and are unaffected by rules; a call
+a guard refuses never reaches the rules.
+
+```jsonc
+{
+  "id": "slug",                  // required
+  "kind": "refuse",              // refuse (default) | warn
+  "tools": ["shell", "bash"],    // required
+  "match": ["/pattern/flags"],   // string or array
+  "except": ["/^rc\\.local$/"],  // optional
+  "on": ["path"],                // optional
+  "message": "…",                // required
+  "allow_from": ["~/dev/x"],     // optional
+  "unless_turn_tool": "question" // optional
+}
+```
+
+| key | default | meaning |
+|---|---|---|
+| `id` | — (required) | slug naming the rule in refusals, warnings and logs |
+| `kind` | `"refuse"` | `refuse`: the call fails with a tool error; `warn`: the call runs and the message is appended to its result |
+| `tools` | — (required) | tool names the rule inspects (`shell`, `edit`, `execute`, an MCP tool name, …) |
+| `match` | — (required) | one pattern or a list; `/body/flags` is a regular expression with flags, anything else is a plain pattern compiled without flags; the rule fires on the first pattern that matches any inspected field |
+| `except` | none | patterns tested against the *matched text*; a match whose text matches any of them is ignored and the search continues |
+| `on` | all fields of the tool | restricts which subject fields are inspected (see the table below) |
+| `message` | — (required) | appended to the refusal or warning; `{id}`, `{tool}`, `{match}`, `{directory}`, `{subject}` are substituted |
+| `allow_from` | none | directories (`~` expands); a session rooted at or below any of them skips the rule |
+| `unless_turn_tool` | none | tool name; the rule passes when the current turn already contains a completed call of that tool |
+
+Rules are validated when the plugin loads: an entry without `id`, `tools` or `message`, or with a
+pattern that does not compile, is dropped with a `[project-guard]` warning on stderr. The other rules
+stay active.
+
+### Subject fields
+
+| tool | fields |
+|---|---|
+| `shell`, `bash` | `command` — the command line, prefixed with `cd <workdir> && ` when the call has a `workdir` |
+| `edit`, `write`, `patch` | `path` — the resolved absolute target paths, one per line; `content` — the text being written (`content`, `newString` or the patch text) |
+| `execute` (Code Mode) | `code` — the JavaScript passed to the runtime |
+| any other tool | `name` — the tool name; `input` — the input as JSON |
+
+Because `path` holds one target per line, anchor path patterns with the `m` flag
+(`/…\.ya?ml$/m`) when a patch can touch several files.
+
+### Refusal and warning text
+
+A refuse rule throws
+
+```
+[project-guard] rule `<id>` refused `<tool>`: matched "<text>" in <field>. <message>
+```
+
+A warn rule lets the call run and appends
+
+```
+[project-guard] rule `<id>` warning for `<tool>`: matched "<text>" in <field>. <message>
+```
+
+to the tool's result, so the model reads it next to the output. Warnings are only added to calls that
+completed; a failed call gets none. When several rules match, the first refuse rule in configuration
+order decides; the warnings of every matching warn rule are appended.
+
+### Examples
+
+(a) Refuse a shell command:
+
+```jsonc
+{
+  "id": "no-self-upgrade",
+  "tools": ["shell", "bash"],
+  "match": ["/\\bopencode\\s+upgrade\\b/i", "/opencode\\.ai\\/install/i"],
+  "message": "The opencode binary is updated by the release pipeline. Report to the user instead."
+}
+```
+
+(b) Refuse a hostname pattern in commands and in written file content, with an exception:
+
+```jsonc
+{
+  "id": "no-dot-local",
+  "tools": ["shell", "bash", "edit", "write", "patch"],
+  "match": ["/(?<![\\w.\\/~-])[a-z0-9-]+\\.local\\b(?![\\w.-])/i"],
+  "except": ["/^rc\\.local$/"],
+  "message": "`.local` hostnames are not resolved here; use `<name>.home.internal` instead."
+}
+```
+
+Without `on`, the rule inspects `command` for shell tools and both `path` and `content` for file
+tools; `rc.local` is a file name, not a host, so `except` lets it pass.
+
+(c) Refuse a Code Mode call unless the user approved it in this turn:
+
+```jsonc
+{
+  "id": "print-approval",
+  "tools": ["execute"],
+  "match": ["/\\b(start_print|add_to_queue)\\b/"],
+  "unless_turn_tool": "question",
+  "message": "Starting a print on the 3D-printer API needs the user's approval via the question tool in this turn. Ask first."
+}
+```
+
+(d) Warn on compose-file edits from outside the owner project:
+
+```jsonc
+{
+  "id": "compose-reminder",
+  "kind": "warn",
+  "tools": ["edit", "write", "patch"],
+  "on": ["path"],
+  "match": ["/(^|\\/)(docker-)?compose[\\w.-]*\\.ya?ml$/m"],
+  "allow_from": ["~/dev/infra"],
+  "message": "If this service is managed by the service orchestrator, change it through its API instead."
+}
+```
+
 ## Logging
 
-Every refusal is logged to the OpenCode server's stderr as
-`[project-guard] refused <tool> <target> from <directory> (owner <owner>, session <id>)`. With
+Every guard refusal is logged to the OpenCode server's stderr as
+`[project-guard] refused <tool> <target> from <directory> (owner <owner>, session <id>)`. Rules log
+`[project-guard] refused <tool> by rule <id> from <directory> (session <id>)` and
+`[project-guard] warned <tool> by rule <id> from <directory>`; a rule dropped at load logs why. With
 `debug: true`, allowed calls are logged as `[project-guard] allowed <tool> <targets> from <directory>`.
 An internal fault is logged as `[project-guard] internal failure, letting <tool> through: …` and the
 call proceeds.
 
 ## Caveats
 
-- Without `guards` the plugin loads and does nothing.
+- Without `guards` or `rules` the plugin loads and does nothing.
 - OpenCode loads plugins once per location boot; a location that is already running keeps the plugin
   set and options it started with. Create a new session in that directory (or restart the server) to
   pick up a changed configuration.
@@ -72,3 +205,10 @@ call proceeds.
   heredocs, variables in paths, scripts invoked by name) pass. The guard is a guardrail for agents,
   not a sandbox; see [SDD.md](SDD.md) for what is detected.
 - Paths are compared after `realpath`, so a symlinked checkout and its target count as the same place.
+- Rule patterns are JSON strings, so every regex backslash is doubled: `\b` is written `"\\b"`, a
+  literal dot `"\\."`, a slash inside `/…/` `"\\/"`.
+- `unless_turn_tool` fails open: when the session context cannot be read, the rule passes. It only
+  checks that such a call completed in the current turn, not what it was about.
+- Rules see the tool input as the model wrote it. A command assembled at runtime (variables, `$(…)`,
+  a script file) is not expanded, so a rule can be evaded deliberately; it catches what agents
+  actually type.
