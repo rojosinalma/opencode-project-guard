@@ -22,7 +22,7 @@ The plugin is a single TypeScript file loaded by OpenCode on Bun; there is no bu
 ## Tests
 
 ```sh
-bun install   # fetches @opencode/plugin for type checking only
+bun install --frozen-lockfile   # fetches @opencode/plugin for type checking only
 bun test
 ```
 
@@ -47,13 +47,24 @@ and one that must pass. The same suite runs on every push and pull request in
 
 - Plain, descriptive commit messages in the imperative ("Detect `rsync` destinations").
 - One logical change per commit; keep refactors separate from behaviour changes.
-- A PR describes what the guard now refuses or passes that it did not before, and includes the tests.
-- Bump `version` in `package.json` for releases.
+- Every commit is GPG-signed (`git config commit.gpgsign true`).
+- A PR describes what the guard now refuses or passes that it did not before, includes the tests and
+  adds a line to `CHANGELOG.md` under *Unreleased*.
+
+## Releasing
+
+1. Move the *Unreleased* entries in `CHANGELOG.md` into a new `[X.Y.Z] - YYYY-MM-DD` section and set the
+   same `version` in `package.json`.
+2. Commit, then create a signed tag `vX.Y.Z` and push it with the branch.
+3. Create the GitHub release from that tag with the changelog section as its notes.
 
 ## Documentation
 
-- `README.md` — what it is, requirements, setup, license. Nothing else goes there.
+- `README.md` — what it is, requirements, installation, usage, development, license. Nothing else
+  goes there.
 - `docs/configuration.md` — every option, the refusal text, logging, caveats.
 - `docs/SDD.md` — design: the hook used, how targets are extracted, the shell parser's rules,
   decisions and their rationale, scope, operations.
+- `CHANGELOG.md` — one section per release, product-level wording.
+- `SECURITY.md` — how to report a vulnerability; `CODE_OF_CONDUCT.md` — the Contributor Covenant.
 - `CONTRIBUTING.md` — this file.

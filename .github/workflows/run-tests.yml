@@ -1,7 +1,9 @@
 name: run-tests
+run-name: ${{ github.event.pull_request.title || github.event.head_commit.message }} · ${{ github.actor }}
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -15,5 +17,5 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.4.2"
-      - run: bun install
+      - run: bun install --frozen-lockfile
       - run: bun test

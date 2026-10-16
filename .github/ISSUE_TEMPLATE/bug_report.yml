@@ -1,0 +1,47 @@
+name: Bug report
+description: The guard refused something it should pass, passed something it should refuse, or broke a session
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for the report. Replace real paths with neutral ones if you prefer; the command shape matters, not the names.
+  - type: input
+    id: version
+    attributes:
+      label: Plugin version
+      description: The `version` in `package.json` of your clone, or the git tag/sha.
+      placeholder: v0.2.0
+    validations:
+      required: true
+  - type: input
+    id: opencode
+    attributes:
+      label: OpenCode and Bun versions
+      placeholder: opencode 2.0.30 / bun 1.4.2
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of problem?
+      options:
+        - False positive (a read or an allowed write was refused)
+        - False negative (a write into a guarded path passed)
+        - Plugin error or crash
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: The tool call or shell command, the session directory, the guard configuration (owner + paths) and the result.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server log lines
+      description: Relevant `[project-guard]` lines from the OpenCode server's stderr.
+      render: text

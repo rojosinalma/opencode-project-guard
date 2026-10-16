@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "description": "OpenCode plugin: refuses file and shell writes into another project's territory",
   "author": "rojosinalma",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "main": "index.ts",
   "scripts": {

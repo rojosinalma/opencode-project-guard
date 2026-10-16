@@ -1,0 +1,38 @@
+name: Feature request
+description: Propose a new detection rule, option or behaviour
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What write (or false refusal) do you run into that the guard does not handle today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: How should it work? A new command rule, an option, a change to the refusal text…
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Shell command detection
+        - File tool targets (edit / write / patch)
+        - Options and configuration
+        - Refusal message and logging
+        - Documentation
+        - Other
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: The change keeps the fail-open rule (an unsure parser passes the call).
+        - label: I searched existing issues.
