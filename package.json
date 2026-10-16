@@ -1,6 +1,6 @@
 {
   "name": "opencode-project-guard",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "OpenCode plugin: refuses file and shell writes into another project's territory and enforces pattern rules on tool calls",
   "author": "rojosinalma",
   "license": "AGPL-3.0-only",

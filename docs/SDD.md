@@ -123,6 +123,13 @@ same hooks as the guards, with their own data path.
    messages since the user's last prompt) already contains a completed call of that tool. The session
    context is only read when such a hit exists. When the lookup fails or the turn cannot be located,
    the rule passes and a `[project-guard]` line says so.
+7. **Approval match.** A hit carrying `unless_turn_tool_match` collects the completed calls of the
+   named tool in the same turn, keeps only the answers that equal one of the call's option labels,
+   runs `answer` over them (named groups = one approved job) and extracts the same keys from the
+   hit's subject text with `code`. The hit is dropped when one approved job equals every extracted
+   key and every `require`d key is present; otherwise it stays, with a `detail` that names what was
+   approved and what the call names. A missing context, a missing message or a turn without such a
+   call keeps the hit (fail closed).
 
 Invalid rules (no `id`, no `tools`, no `message`, a pattern that does not compile, an unknown `kind`
 or `on` field) are dropped at load with a stderr warning; the remaining rules stay active.
@@ -130,7 +137,8 @@ or `on` field) are dropped at load with a stderr warning; the remaining rules st
 ## Configuration surface
 
 `plugins[].options` in `opencode.jsonc`: `guards` (list of `{ owner, paths, message? }`), `rules`
-(list of `{ id, kind?, tools, match, except?, on?, message, allow_from?, unless_turn_tool? }`) and
+(list of `{ id, kind?, tools, match, except?, on?, message, allow_from?, unless_turn_tool?,
+unless_turn_tool_match? }`) and
 `debug`. Full reference and the caveats in [configuration.md](configuration.md).
 
 ## Decisions and rationale
@@ -160,6 +168,12 @@ or `on` field) are dropped at load with a stderr warning; the remaining rules st
   completed approval call in the turn. If the session context is unavailable, refusing would block
   legitimate work for a reason the model cannot fix, which breaks priority 1; the check passes and
   logs instead.
+- **`unless_turn_tool_match` fails closed.** It exists for actions with a real-world cost (a print
+  job, a deployment) where a missed approval is worse than a refused call; the refusal tells the
+  model exactly what was approved and what it asked for, so it can ask again. Only chosen option
+  labels approve: a typed answer is free text the model could have suggested, and the token is placed
+  in the label by the agent itself, so the user's click is the only thing that moves a job from
+  "proposed" to "approved".
 
 ## Current scope and non-goals
 

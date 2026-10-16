@@ -33,7 +33,13 @@ export type Rule = {
   message: string
   allow_from?: string[]
   unless_turn_tool?: string
+  unless_turn_tool_match?: TurnToolMatch
 }
+// `unless_turn_tool_match`: the rule passes only when a completed call of `tool` in the current turn
+// approved the same job the guarded call names. `answer` runs over the chosen option labels and its
+// named groups describe one approved job; `code` extracts the same keys from the guarded call's
+// subject text; `require` lists the keys the call must name (default: all of `code`).
+export type TurnToolMatch = { tool: string; answer: RegExp; code: Record<string, RegExp>; require: string[] }
 export type Options = { guards: Guard[]; rules: Rule[]; debug: boolean }
 
 // No guards by default: every guard comes from `options.guards`.
@@ -58,6 +64,13 @@ export function parseRegex(s: string): RegExp | undefined {
   } catch {
     return undefined
   }
+}
+
+// Names of the named capture groups of a regex: an empty alternative makes the regex match "" and
+// the resulting `groups` object lists every name.
+export function namedGroups(re: RegExp): string[] {
+  const probe = new RegExp(`(?:${re.source})|`, re.flags.replace("g", "").replace("y", ""))
+  return Object.keys(probe.exec("")?.groups ?? {})
 }
 
 function regexList(v: unknown): RegExp[] | undefined {
@@ -102,7 +115,39 @@ export function resolveRule(raw: any): { rule?: Rule; reason?: string } {
     if (typeof raw.unless_turn_tool !== "string" || raw.unless_turn_tool.length === 0) return { reason: `rule ${id}: unless_turn_tool must be a tool name` }
     rule.unless_turn_tool = raw.unless_turn_tool
   }
+  if (raw.unless_turn_tool_match !== undefined) {
+    if (rule.unless_turn_tool) return { reason: `rule ${id}: unless_turn_tool and unless_turn_tool_match are exclusive` }
+    const { spec, reason } = resolveTurnToolMatch(raw.unless_turn_tool_match)
+    if (!spec) return { reason: `rule ${id}: unless_turn_tool_match ${reason}` }
+    rule.unless_turn_tool_match = spec
+  }
   return { rule }
+}
+
+export function resolveTurnToolMatch(raw: any): { spec?: TurnToolMatch; reason?: string } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { reason: "must be an object" }
+  if (typeof raw.tool !== "string" || raw.tool.length === 0) return { reason: "tool must be a tool name" }
+  if (typeof raw.answer !== "string") return { reason: "answer must be a regex string" }
+  const answer = parseRegex(raw.answer)
+  if (!answer) return { reason: "answer must be a valid regex" }
+  const names = namedGroups(answer)
+  if (names.length === 0) return { reason: "answer must have at least one named group" }
+  if (!raw.code || typeof raw.code !== "object" || Array.isArray(raw.code)) return { reason: "code must be an object of key → regex" }
+  const code: Record<string, RegExp> = {}
+  for (const [key, v] of Object.entries(raw.code)) {
+    if (!names.includes(key)) return { reason: `code key "${key}" is not a named group of answer` }
+    const re = typeof v === "string" ? parseRegex(v) : undefined
+    if (!re) return { reason: `code.${key} must be a valid regex string` }
+    code[key] = re
+  }
+  const keys = Object.keys(code)
+  if (keys.length === 0) return { reason: "code must name at least one key" }
+  let require = keys
+  if (raw.require !== undefined) {
+    if (!Array.isArray(raw.require) || !raw.require.every((k: unknown) => typeof k === "string" && keys.includes(k))) return { reason: "require must list keys of code" }
+    require = [...raw.require]
+  }
+  return { spec: { tool: raw.tool, answer, code, require } }
 }
 
 export function resolveOptions(raw: Readonly<Record<string, any>> = {}, warn: (msg: string) => void = (m) => console.error(`[project-guard] ${m}`)): Options {
@@ -487,7 +532,7 @@ export function subjectsOf(tool: string, input: unknown, directory: string): Par
   return { name: tool, input: JSON.stringify(input) ?? "" }
 }
 
-export type RuleHit = { rule: Rule; field: RuleField; match: string; tool: string }
+export type RuleHit = { rule: Rule; field: RuleField; match: string; tool: string; subject: string; detail?: string }
 
 // First counting match of `rule` in the subjects: a match whose text is covered by an `except`
 // pattern is skipped. Regexes are copied with the `g` flag so the configured objects keep no state.
@@ -516,35 +561,145 @@ export function decideRules(opts: Options, directory: string, tool: string, inpu
   for (const rule of rules) {
     if (rule.allow_from?.some((root) => isUnder(directory, root))) continue
     const m = firstMatch(rule, subjects)
-    if (m) hits.push({ rule, field: m.field, match: m.match, tool })
+    if (m) hits.push({ rule, field: m.field, match: m.match, tool, subject: subjects[m.field] ?? "" })
   }
   return hits
 }
 
 export function ruleText(hit: RuleHit, directory: string): string {
-  const { rule, field, match, tool } = hit
-  const vars: Record<string, string> = { id: rule.id, tool, match, directory, subject: field }
-  const message = rule.message.replace(/\{(id|tool|match|directory|subject)\}/g, (_m, k: string) => vars[k] ?? "")
-  return `[project-guard] rule \`${rule.id}\` ${rule.kind === "refuse" ? "refused" : "warning for"} \`${tool}\`: matched "${match}" in ${field}. ${message}`
+  const { rule, field, match, tool, detail } = hit
+  const vars: Record<string, string> = { id: rule.id, tool, match, directory, subject: field, detail: detail ?? "" }
+  const message = rule.message.replace(/\{(id|tool|match|directory|subject|detail)\}/g, (_m, k: string) => vars[k] ?? "")
+  const tail = detail ? ` Approval check: ${detail}.` : ""
+  return `[project-guard] rule \`${rule.id}\` ${rule.kind === "refuse" ? "refused" : "warning for"} \`${tool}\`: matched "${match}" in ${field}. ${message}${tail}`
 }
 
-type ContextPart = { type: string; name?: string; state?: { status?: string } }
+type ToolState = { status?: string; input?: unknown; content?: unknown; metadata?: unknown }
+type ContextPart = { type: string; name?: string; state?: ToolState }
 type ContextMessage = { id: string; type: string; content?: ContextPart[] }
 
-// Whether the turn that `messageID` belongs to (that message and every message back to, not
-// including, the previous user message) carries a completed tool part named `toolName`.
-// Undefined when the message is not in the context.
-export function turnHasCompletedTool(messages: ContextMessage[], messageID: string, toolName: string): boolean | undefined {
+// The messages of the turn `messageID` belongs to: that message and every message back to, not
+// including, the previous user message. Undefined when the message is not in the context.
+export function turnMessages(messages: ContextMessage[], messageID: string): ContextMessage[] | undefined {
   const idx = messages.findIndex((m) => m.id === messageID)
   if (idx < 0) return undefined
-  for (let i = idx; i >= 0; i--) {
-    const m = messages[i]
-    if (i !== idx && m.type === "user") break
+  let start = idx
+  while (start > 0 && messages[start - 1].type !== "user") start--
+  return messages.slice(start, idx + 1)
+}
+
+function completedParts(turn: ContextMessage[], toolName: string): ToolState[] {
+  const out: ToolState[] = []
+  for (const m of turn) {
     for (const part of m.content ?? []) {
-      if (part.type === "tool" && part.name === toolName && part.state?.status === "completed") return true
+      if (part.type === "tool" && part.name === toolName && part.state?.status === "completed") out.push(part.state)
     }
   }
-  return false
+  return out
+}
+
+// Whether the turn that `messageID` belongs to carries a completed tool part named `toolName`.
+// Undefined when the message is not in the context.
+export function turnHasCompletedTool(messages: ContextMessage[], messageID: string, toolName: string): boolean | undefined {
+  const turn = turnMessages(messages, messageID)
+  return turn && completedParts(turn, toolName).length > 0
+}
+
+// Option labels of a completed `question` call: every configured option label.
+function optionLabels(state: ToolState): Set<string> {
+  const labels = new Set<string>()
+  const questions = (state.input as { questions?: unknown } | undefined)?.questions
+  if (!Array.isArray(questions)) return labels
+  for (const q of questions) {
+    const options = (q as { options?: unknown })?.options
+    if (!Array.isArray(options)) continue
+    for (const o of options) if (typeof (o as { label?: unknown })?.label === "string") labels.add((o as { label: string }).label)
+  }
+  return labels
+}
+
+function questionTexts(state: ToolState): string[] {
+  const questions = (state.input as { questions?: unknown } | undefined)?.questions
+  if (!Array.isArray(questions)) return []
+  return questions.map((q) => (q as { question?: unknown })?.question).filter((q): q is string => typeof q === "string")
+}
+
+function contentText(state: ToolState): string {
+  if (typeof state.content === "string") return state.content
+  if (!Array.isArray(state.content)) return ""
+  return state.content.map((b) => (b && typeof b === "object" && typeof (b as { text?: unknown }).text === "string" ? (b as { text: string }).text : "")).join("\n")
+}
+
+// The answers the user gave to a completed `question` call. `metadata.answers` (string[][]) is
+// authoritative; without it the result text `"<question>"="<answer, answer>"` is parsed.
+export function chosenAnswers(state: ToolState): string[] {
+  const answers = (state.metadata as { answers?: unknown } | undefined)?.answers
+  if (Array.isArray(answers)) return answers.flat().filter((a): a is string => typeof a === "string")
+  const text = contentText(state)
+  const out = new Set<string>()
+  for (const q of questionTexts(state)) {
+    const marker = `"${q}"="`
+    const at = text.indexOf(marker)
+    if (at < 0) continue
+    const rest = text.slice(at + marker.length)
+    const end = rest.search(/"(?=\s*(?:,|\.|$))/)
+    const joined = end < 0 ? rest : rest.slice(0, end)
+    for (const a of [joined, ...joined.split(", ")]) if (a.length) out.add(a)
+  }
+  return [...out]
+}
+
+export type ApprovedJob = Record<string, string>
+
+// Approved jobs in the turn of `messageID`: for every completed `spec.tool` part, each chosen answer
+// that equals one of its option labels (a typed answer never approves) is matched against
+// `spec.answer`; every match's named groups form one job. `questions` counts the completed parts.
+// Undefined when the message is not in the context.
+export function approvedJobs(messages: ContextMessage[], messageID: string, spec: TurnToolMatch): { jobs: ApprovedJob[]; questions: number } | undefined {
+  const turn = turnMessages(messages, messageID)
+  if (!turn) return undefined
+  const parts = completedParts(turn, spec.tool)
+  const jobs: ApprovedJob[] = []
+  const re = new RegExp(spec.answer.source, spec.answer.flags.includes("g") ? spec.answer.flags : spec.answer.flags + "g")
+  for (const state of parts) {
+    const labels = optionLabels(state)
+    for (const answer of chosenAnswers(state)) {
+      if (!labels.has(answer)) continue
+      for (const m of answer.matchAll(re)) {
+        const job: ApprovedJob = {}
+        for (const [k, v] of Object.entries(m.groups ?? {})) if (typeof v === "string") job[k] = v.trim()
+        if (Object.keys(job).length) jobs.push(job)
+      }
+    }
+  }
+  return { jobs, questions: parts.length }
+}
+
+// What the guarded call names: for every `spec.code` key, the first match in `text` (named group of
+// the same key, else group 1, else the whole match), trimmed. Absent keys are left out.
+export function extractKeys(text: string, spec: TurnToolMatch): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [key, re] of Object.entries(spec.code)) {
+    const m = new RegExp(re.source, re.flags.replace("g", "")).exec(text)
+    if (!m) continue
+    const v = m.groups?.[key] ?? m[1] ?? m[0]
+    if (typeof v === "string") out[key] = v.trim()
+  }
+  return out
+}
+
+const fmt = (job: Record<string, string>) => Object.entries(job).map(([k, v]) => `${k}=${v}`).join(" ") || "nothing"
+
+// Whether `text` (the guarded call's subject) names a job that one of `jobs` approved: every key in
+// `spec.require` must be present, and every extracted key must equal the job's value.
+export function matchApproval(text: string, jobs: ApprovedJob[], spec: TurnToolMatch): { ok: boolean; detail: string } {
+  const named = extractKeys(text, spec)
+  const missing = spec.require.filter((k) => named[k] === undefined)
+  if (missing.length) return { ok: false, detail: `code names no ${missing.join(", ")}` }
+  if (jobs.length === 0) return { ok: false, detail: `question answered but no approval token in the chosen option; call names: ${fmt(named)}` }
+  const hit = jobs.find((job) => Object.entries(named).every(([k, v]) => job[k] === v))
+  if (hit) return { ok: true, detail: `approved: ${fmt(hit)}; call names: ${fmt(named)}` }
+  return { ok: false, detail: `approved: ${jobs.map(fmt).join(" | ")}; call names: ${fmt(named)}` }
 }
 
 type TextBlock = { type: "text"; text: string }
@@ -570,20 +725,42 @@ const plugin: Plugin.Plugin = {
     const hasRules = opts.rules.length > 0
     const hasWarnRules = opts.rules.some((r) => r.kind === "warn")
 
-    // Drops the hits whose `unless_turn_tool` is satisfied. The session context is read only when a
-    // hit carries that condition; a failed lookup passes the rule (fail open).
+    // Drops the hits whose turn condition is satisfied. The session context is read only when a hit
+    // carries one. `unless_turn_tool` fails open (a failed lookup passes the rule);
+    // `unless_turn_tool_match` fails closed (the rule refuses and says why in `detail`).
     const applyTurnCondition = async (hits: RuleHit[], sessionID: string, messageID: string): Promise<RuleHit[]> => {
-      if (!hits.some((h) => h.rule.unless_turn_tool)) return hits
+      if (!hits.some((h) => h.rule.unless_turn_tool || h.rule.unless_turn_tool_match)) return hits
       let messages: ContextMessage[] | undefined
       try {
         messages = (await ctx.session.context({ sessionID })) as unknown as ContextMessage[]
+        if (!Array.isArray(messages)) messages = undefined
       } catch (error) {
         log(`context lookup failed for ${sessionID}: ${error instanceof Error ? error.message : String(error)}`)
       }
       return hits.filter((h) => {
+        const spec = h.rule.unless_turn_tool_match
+        if (spec) {
+          const found = messages ? approvedJobs(messages, messageID, spec) : undefined
+          if (!found) {
+            h.detail = messages ? "guarded message not found in the session context" : "session context unavailable"
+            log(`rule ${h.rule.id}: ${h.detail}, refusing (fail closed)`)
+            return true
+          }
+          if (found.questions === 0) {
+            h.detail = `no completed ${spec.tool} in this turn`
+            return true
+          }
+          const verdict = matchApproval(h.subject, found.jobs, spec)
+          if (verdict.ok) {
+            if (opts.debug) log(`rule ${h.rule.id}: ${verdict.detail}`)
+            return false
+          }
+          h.detail = verdict.detail
+          return true
+        }
         const tool = h.rule.unless_turn_tool
         if (!tool) return true
-        const has = Array.isArray(messages) ? turnHasCompletedTool(messages, messageID, tool) : undefined
+        const has = messages ? turnHasCompletedTool(messages, messageID, tool) : undefined
         if (has === undefined) {
           log(`rule ${h.rule.id}: turn-tool check unavailable, passing`)
           return false

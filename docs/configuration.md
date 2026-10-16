@@ -81,7 +81,8 @@ a guard refuses never reaches the rules.
   "on": ["path"],                // optional
   "message": "…",                // required
   "allow_from": ["~/dev/x"],     // optional
-  "unless_turn_tool": "question" // optional
+  "unless_turn_tool": "question", // optional
+  "unless_turn_tool_match": { … } // optional, exclusive with unless_turn_tool (see below)
 }
 ```
 
@@ -96,10 +97,39 @@ a guard refuses never reaches the rules.
 | `message` | — (required) | appended to the refusal or warning; `{id}`, `{tool}`, `{match}`, `{directory}`, `{subject}` are substituted |
 | `allow_from` | none | directories (`~` expands); a session rooted at or below any of them skips the rule |
 | `unless_turn_tool` | none | tool name; the rule passes when the current turn already contains a completed call of that tool |
+| `unless_turn_tool_match` | none | `{ tool, answer, code, require? }`; the rule passes only when a completed call of `tool` in the current turn approved the same job the guarded call names (below) |
 
 Rules are validated when the plugin loads: an entry without `id`, `tools` or `message`, or with a
 pattern that does not compile, is dropped with a `[project-guard]` warning on stderr. The other rules
 stay active.
+
+### `unless_turn_tool_match`
+
+| key | default | meaning |
+|---|---|---|
+| `tool` | — (required) | the approving tool, normally `question` |
+| `answer` | — (required) | regex with at least one named group; run over every option label the user chose in a completed `tool` call of the turn, each match's named groups form one *approved job* |
+| `code` | — (required) | object `key → regex`; every key must be a named group of `answer`; the regex extracts that key from the guarded call's matched subject field (named group of the same key, else group 1, else the whole match; first match, trimmed) |
+| `require` | all keys of `code` | keys the guarded call must name; a missing one refuses with `code names no <key>` |
+
+Only answers equal to one of the call's `options[].label` count; a typed answer never approves, even
+when it contains the token. The chosen labels come from the completed part's `metadata.answers`,
+with the result text parsed as a fallback. The rule passes when at least one approved job equals every
+key extracted from the call (plain string compare: `340, 341` never equals `340`). Keys that are not
+required and absent from the call are not compared.
+
+Unlike `unless_turn_tool`, this condition **fails closed**: a failed context lookup, a guarded message
+missing from the context or a turn without a completed `tool` call refuses, and the stderr line says
+why. The refusal (or warning) text always ends with `Approval check: <detail>.`, where the detail is
+`approved: file=340 plate=1 printer=1 copies=1; call names: file=341 printer=1`, `no completed question
+in this turn`, `question answered but no approval token in the chosen option; call names: …`,
+`code names no printer`, `session context unavailable` or `guarded message not found in the session
+context`; `{detail}` in `message` substitutes the same text. A rule may carry either
+`unless_turn_tool` or `unless_turn_tool_match`, not both.
+
+The condition only sees the tool calls the plugin hooks. A shell command that reaches the same HTTP
+API directly (`curl …`) is a `shell` call with a `command` subject, which an `execute` rule never
+inspects: cover it with a separate `shell` rule or accept that it stays uncovered.
 
 ### Subject fields
 
@@ -171,6 +201,29 @@ tools; `rc.local` is a file name, not a host, so `except` lets it pass.
 }
 ```
 
+(c′) The same, but only for the job the user approved — the agent puts a token in the option label
+(`Print [print file=340 plate=1 printer=1 copies=1]`) and the call must name the same ids:
+
+```jsonc
+{
+  "id": "print-approval",
+  "tools": ["execute"],
+  "match": ["/\\b(print_library_file|add_files_to_queue)\\b/"],
+  "unless_turn_tool_match": {
+    "tool": "question",
+    "answer": "/\\[print file=(?<file>\\d+) plate=(?<plate>\\d+|-) printer=(?<printer>\\d+) copies=(?<copies>\\d+)\\]/",
+    "code": {
+      "file": "/\\bfile_ids?\\b\\W{0,4}(\\d+(?:\\s*,\\s*\\d+)*)/",
+      "printer": "/\\bprinter_id\\b\\W{0,3}(\\d+)/",
+      "plate": "/\\bplate_(?:id|index|number|idx)\\b\\W{0,3}(\\d+)/",
+      "copies": "/\\b(?:copies|quantity|qty)\\b\\W{0,3}(\\d+)/"
+    },
+    "require": ["file", "printer"]
+  },
+  "message": "Starting a print needs the user's approval of that exact job in this turn. Ask first."
+}
+```
+
 (d) Warn on compose-file edits from outside the owner project:
 
 ```jsonc
@@ -208,7 +261,8 @@ call proceeds.
 - Rule patterns are JSON strings, so every regex backslash is doubled: `\b` is written `"\\b"`, a
   literal dot `"\\."`, a slash inside `/…/` `"\\/"`.
 - `unless_turn_tool` fails open: when the session context cannot be read, the rule passes. It only
-  checks that such a call completed in the current turn, not what it was about.
+  checks that such a call completed in the current turn, not what it was about; use
+  `unless_turn_tool_match` for the latter, which fails closed instead.
 - Rules see the tool input as the model wrote it. A command assembled at runtime (variables, `$(…)`,
   a script file) is not expanded, so a rule can be evaded deliberately; it catches what agents
   actually type.

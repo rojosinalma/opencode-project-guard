@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-16
+
+### Added
+
+- `unless_turn_tool_match`: a turn condition that passes a rule only when a completed call of the
+  named tool (typically `question`) earlier in the same turn approved the *same job* the guarded call
+  names. `answer` is a regex with named groups run over the option labels the user chose (a typed
+  answer never approves), `code` maps each group to a regex that extracts the same key from the
+  guarded call's subject text, `require` lists the keys the call must name. The rule passes when one
+  approved job equals every extracted key, so a call naming two file ids never matches an approval
+  for one.
+- `{detail}` placeholder in rule messages; refusals and warnings from `unless_turn_tool_match` always
+  end with `Approval check: <detail>.` saying what was approved and what the call names.
+- Exported helpers `turnMessages`, `namedGroups`, `chosenAnswers`, `approvedJobs`, `extractKeys`,
+  `matchApproval`, `resolveTurnToolMatch`; `RuleHit` carries the full `subject` text and the `detail`.
+
+### Changed
+
+- `unless_turn_tool_match` fails **closed**: an unavailable session context, a guarded message not
+  found in it or a turn without a completed call of the tool refuses the call (logged). The plain
+  `unless_turn_tool` keeps failing open. A rule may carry only one of the two conditions.
+
 ## [0.3.0] - 2026-10-16
 
 ### Added
@@ -49,6 +71,7 @@ First public release.
 
 - Licence to AGPL-3.0.
 
-[Unreleased]: https://github.com/rojosinalma/opencode-project-guard/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/rojosinalma/opencode-project-guard/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/rojosinalma/opencode-project-guard/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/rojosinalma/opencode-project-guard/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/rojosinalma/opencode-project-guard/releases/tag/v0.2.0
