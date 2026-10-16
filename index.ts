@@ -1,4 +1,4 @@
-// Type-only import: Bun resolves bare specifiers from the symlink's real path, where no node_modules exists.
+// Type-only import: erased at runtime, so the plugin directory needs no node_modules of its own.
 import type { Plugin } from "@opencode/plugin"
 import * as fs from "node:fs"
 import * as os from "node:os"

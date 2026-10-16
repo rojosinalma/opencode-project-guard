@@ -7,7 +7,14 @@ a shell command would write there. Reads always pass, and when the shell parser 
 passes too — false negatives are acceptable, false positives are not. Any internal fault is logged and
 lets the call through, so the guard can never break a session.
 
-## Install
+Configuration and design are documented in `docs/`.
+
+## Requirements
+
+- OpenCode 2.x running on Bun (the plugin API is `@opencode/plugin` 2.x).
+- No runtime dependencies: `@opencode/plugin` is imported as types only.
+
+## Setup
 
 Clone into the global plugins directory and configure your guards in `opencode.jsonc`:
 
@@ -35,29 +42,9 @@ git clone https://github.com/rojosinalma/opencode-project-guard ~/.config/openco
 }
 ```
 
-No runtime dependencies (`@opencode/plugin` is imported as types only).
+Without `guards` the plugin loads and does nothing. All options are described in
+[docs/configuration.md](docs/configuration.md).
 
-## Options
+## License
 
-| key | default | meaning |
-|---|---|---|
-| `guards` | `[]` (plugin inert) | list of `{ owner, paths, message? }`; `~` expands in `owner` and `paths` |
-| `guards[].message` | generic text | protocol appended to the refusal; `{owner}`, `{target}`, `{tool}`, `{directory}` are substituted |
-| `debug` | `false` | log every decision |
-
-## How it works
-
-1. `tool.hook("execute.before")` on `edit`/`write`/`patch` resolves the target path (patches are parsed for theirs) and compares it with the guarded roots.
-2. On `shell`/`bash` a conservative write-intent parser looks at redirections, `tee`, `sed -i`, `rm/mv/cp/mkdir/touch/chmod`, `git -C <dir> add|commit|…`, `docker compose -f <file>|cwd up|down|restart|…`; `cd` updates the cwd per `&&`/`;`/`|` segment. `git log/diff/status` and `compose logs/ps` pass.
-3. A refusal is thrown as the tool error: what was refused and why, then the guard's `message` or a generic "change it from the owning project, report to the user" instruction.
-
-## Tests
-
-```sh
-bun test
-```
-
-## Caveats
-
-- Without `guards` the plugin loads and does nothing.
-- Loaded per location boot; running locations keep the plugin set they started with.
+MIT — see [LICENSE](LICENSE).
