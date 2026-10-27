@@ -110,7 +110,7 @@ the user chose carries a token describing the same job the guarded call names.
     "answer": "/\\[print file=(?<file>\\d+) plate=(?<plate>\\d+|-) printer=(?<printer>\\d+) copies=(?<copies>\\d+)\\]/",
     // the same keys, extracted from the guarded call's subject (the Code Mode `code` here)
     "code": {
-      "file": "/\\bfile_ids?\\b\\W{0,4}(\\d+(?:\\s*,\\s*\\d+)*)/",
+      "file": "/\\b(?:library_)?file_ids?\\b\\W{0,4}(\\d+(?:\\s*,\\s*\\d+)*)/",
       "printer": "/\\bprinter_id\\b\\W{0,3}(\\d+)/",
       "plate": "/\\bplate_(?:id|index|number|idx)\\b\\W{0,3}(\\d+)/",
       "copies": "/\\b(?:copies|quantity|qty)\\b\\W{0,3}(\\d+)/"

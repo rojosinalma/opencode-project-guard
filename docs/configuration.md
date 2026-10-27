@@ -213,7 +213,7 @@ tools; `rc.local` is a file name, not a host, so `except` lets it pass.
     "tool": "question",
     "answer": "/\\[print file=(?<file>\\d+) plate=(?<plate>\\d+|-) printer=(?<printer>\\d+) copies=(?<copies>\\d+)\\]/",
     "code": {
-      "file": "/\\bfile_ids?\\b\\W{0,4}(\\d+(?:\\s*,\\s*\\d+)*)/",
+      "file": "/\\b(?:library_)?file_ids?\\b\\W{0,4}(\\d+(?:\\s*,\\s*\\d+)*)/",
       "printer": "/\\bprinter_id\\b\\W{0,3}(\\d+)/",
       "plate": "/\\bplate_(?:id|index|number|idx)\\b\\W{0,3}(\\d+)/",
       "copies": "/\\b(?:copies|quantity|qty)\\b\\W{0,3}(\\d+)/"

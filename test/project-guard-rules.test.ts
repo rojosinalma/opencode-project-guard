@@ -239,7 +239,7 @@ const APPROVAL = {
   tool: "question",
   answer: "/\\[print file=(?<file>\\d+) plate=(?<plate>\\d+|-) printer=(?<printer>\\d+) copies=(?<copies>\\d+)\\]/",
   code: {
-    file: "/\\bfile_ids?\\b\\W{0,4}(\\d+(?:\\s*,\\s*\\d+)*)/",
+    file: "/\\b(?:library_)?file_ids?\\b\\W{0,4}(\\d+(?:\\s*,\\s*\\d+)*)/",
     printer: "/\\bprinter_id\\b\\W{0,3}(\\d+)/",
     plate: "/\\bplate_(?:id|index|number|idx)\\b\\W{0,3}(\\d+)/",
     copies: "/\\b(?:copies|quantity|qty)\\b\\W{0,3}(\\d+)/",
@@ -326,6 +326,7 @@ test("extractKeys: first match per key, group 1, trimmed, absent keys left out",
   const s = spec()
   expect(extractKeys(PRINT_CODE, s)).toEqual({ file: "340", printer: "1", plate: "1", copies: "1" })
   expect(extractKeys('execute_tool({name: "add_files_to_queue", arguments: {file_ids: [340, 341], printer_id: 2}})', s)).toEqual({ file: "340, 341", printer: "2" })
+  expect(extractKeys('execute_tool({name: "add_to_queue", arguments: {library_file_id: 512, printer_id: 1, plate_id: 1, timelapse: true}})', s)).toEqual({ file: "512", printer: "1", plate: "1" })
   expect(extractKeys('print_library_file', s)).toEqual({})
   expect(extractKeys('{"printer_id": 1}', s)).toEqual({ printer: "1" })
 })

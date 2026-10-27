@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Docs and tests: the example approval rule's `file` regex also matches `library_file_id`, so a
+  single-item queue call (`{library_file_id: 340, printer_id: 1}`) is compared like `file_ids`.
+
 ## [0.4.0] - 2026-10-16
 
 ### Added
