@@ -39,10 +39,10 @@ git clone https://github.com/rojosinalma/opencode-project-guard ~/.config/openco
       "options": {
         "guards": [
           {
-            "owner": "~/dev/infra",
-            "paths": ["~/dev/infra", "~/dev/dns", "~/dev/proxy"],
+            "owner": "~/projects/infra",
+            "paths": ["~/projects/infra", "~/projects/dns", "~/projects/proxy"],
             // optional: replaces the generic "what to do instead" part of the refusal
-            "message": "Infra is changed only from ~/dev/infra. Describe what you need to the user instead."
+            "message": "Infra is changed only from ~/projects/infra. Describe what you need to the user instead."
           }
         ],
         "rules": [
@@ -58,7 +58,7 @@ git clone https://github.com/rojosinalma/opencode-project-guard ~/.config/openco
             "tools": ["edit", "write", "patch"],
             "on": ["path"],
             "match": ["/(^|\\/)(docker-)?compose[\\w.-]*\\.ya?ml$/m"],
-            "allow_from": ["~/dev/infra"],
+            "allow_from": ["~/projects/infra"],
             "message": "If this service is managed by the service orchestrator, change it through its API instead."
           }
         ]
@@ -74,7 +74,7 @@ Without `guards` or `rules` the plugin loads and does nothing. All options are d
 ## Usage
 
 Nothing to run: once a guard is configured, every new session enforces it. A session rooted outside
-the owner that asks to edit `~/dev/dns/zones.yaml` gets a tool error such as
+the owner that asks to edit `~/projects/dns/zones.yaml` gets a tool error such as
 
 ```
 [project-guard] `edit` refused: /home/me/dev/dns/zones.yaml is owned by the project at

@@ -22,7 +22,7 @@ import plugin, {
 
 const home = os.homedir()
 const h = (p: string) => path.join(home, p)
-const FOO = h("dev/foo")
+const FOO = h("projects/foo")
 const quiet = () => {}
 const rules = (...list: any[]) => resolveOptions({ rules: list }, quiet)
 const hitIds = (opts: ReturnType<typeof resolveOptions>, tool: string, input: unknown, dir = FOO) => decideRules(opts, dir, tool, input).map((x) => x.rule.id)
@@ -45,7 +45,7 @@ const HOUSE = [
     id: "cf-zerotrust",
     tools: ["shell", "bash"],
     match: ["/cf-zerotrust[^\\n;&|]*\\bsync\\.rb\\b/", "/cd\\s+[^\\n;&|]*cf-zerotrust\\b[^\\n]*\\bsync\\.rb\\b/"],
-    message: "~/dev/cf-zerotrust is decommissioned; its sync.rb must never run (Cloudflare routing is owned by the deployer).",
+    message: "cf-zerotrust is decommissioned; its sync.rb must never run (Cloudflare routing is owned by the deployer).",
   },
   {
     id: "dot-local",
@@ -73,7 +73,7 @@ const HOUSE = [
     tools: ["edit", "write", "patch"],
     on: ["path"],
     match: ["/(^|\\/)(docker-)?compose[\\w.-]*\\.ya?ml$/m"],
-    allow_from: ["~/dev/deployer"],
+    allow_from: ["~/projects/deployer"],
     message: "Reminder: if this service is deployer-managed, its compose is rewritten by the deployer — change it through `PUT /api/services/:id/compose` + start (deployer-api skill), not by hand.",
   },
 ]
@@ -120,7 +120,7 @@ test("invalid rules are dropped with a warning, never a crash", () => {
     { id: "bad-kind", tools: ["shell"], match: "a", message: "m", kind: "block" },
     { id: "bad-on", tools: ["shell"], match: "a", message: "m", on: ["nope"] },
     { id: "bad-except", tools: ["shell"], match: "a", message: "m", except: [1] },
-    { id: "bad-allow", tools: ["shell"], match: "a", message: "m", allow_from: "~/dev" },
+    { id: "bad-allow", tools: ["shell"], match: "a", message: "m", allow_from: "~/projects" },
     { id: "bad-turn", tools: ["shell"], match: "a", message: "m", unless_turn_tool: 3 },
     { id: "ok", tools: ["shell"], match: "a", message: "m" },
   ]
@@ -142,10 +142,10 @@ test("regex forms: /body/flags and plain patterns; string or array", () => {
 })
 
 test("allow_from expands ~ and kind/on/unless_turn_tool are kept", () => {
-  const [r] = rules({ id: "a", kind: "warn", tools: ["edit"], on: ["path", "content"], match: "x", message: "m", allow_from: ["~/dev/deployer", "/srv"], unless_turn_tool: "question" }).rules
+  const [r] = rules({ id: "a", kind: "warn", tools: ["edit"], on: ["path", "content"], match: "x", message: "m", allow_from: ["~/projects/deployer", "/srv"], unless_turn_tool: "question" }).rules
   expect(r.kind).toBe("warn")
   expect(r.on).toEqual(["path", "content"])
-  expect(r.allow_from).toEqual([h("dev/deployer"), "/srv"])
+  expect(r.allow_from).toEqual([h("projects/deployer"), "/srv"])
   expect(r.unless_turn_tool).toBe("question")
 })
 
@@ -153,13 +153,13 @@ test("allow_from expands ~ and kind/on/unless_turn_tool are kept", () => {
 
 test("subjectsOf per tool", () => {
   expect(subjectsOf("shell", { command: "ls" }, FOO)).toEqual({ command: "ls" })
-  expect(subjectsOf("bash", { command: "ruby sync.rb", workdir: "~/dev/x" }, FOO)).toEqual({ command: "cd ~/dev/x && ruby sync.rb" })
+  expect(subjectsOf("bash", { command: "ruby sync.rb", workdir: "~/projects/x" }, FOO)).toEqual({ command: "cd ~/projects/x && ruby sync.rb" })
   expect(subjectsOf("shell", { command: "" }, FOO)).toEqual({})
   expect(subjectsOf("shell", null, FOO)).toEqual({})
-  expect(subjectsOf("edit", { path: "a.rb", oldString: "old", newString: "new" }, FOO)).toEqual({ path: h("dev/foo/a.rb"), content: "new" })
+  expect(subjectsOf("edit", { path: "a.rb", oldString: "old", newString: "new" }, FOO)).toEqual({ path: h("projects/foo/a.rb"), content: "new" })
   expect(subjectsOf("write", { filePath: "/abs/b.txt", content: "body" }, FOO)).toEqual({ path: "/abs/b.txt", content: "body" })
   const patchText = `*** Begin Patch\n*** Update File: x.yml\n*** Add File: y.yml\n@@\n+a\n*** End Patch`
-  expect(subjectsOf("patch", { patchText }, FOO)).toEqual({ path: `${h("dev/foo/x.yml")}\n${h("dev/foo/y.yml")}`, content: patchText })
+  expect(subjectsOf("patch", { patchText }, FOO)).toEqual({ path: `${h("projects/foo/x.yml")}\n${h("projects/foo/y.yml")}`, content: patchText })
   expect(subjectsOf("execute", { code: "return 1" }, FOO)).toEqual({ code: "return 1" })
   expect(subjectsOf("execute", {}, FOO)).toEqual({})
   expect(subjectsOf("webfetch", { url: "http://x" }, FOO)).toEqual({ name: "webfetch", input: '{"url":"http://x"}' })
@@ -189,11 +189,11 @@ test("configured regexes are not mutated by iteration", () => {
 })
 
 test("allow_from skips the rule for sessions under those roots", () => {
-  const opts = rules({ id: "a", tools: ["shell"], match: "x", message: "m", allow_from: ["~/dev/deployer"] })
+  const opts = rules({ id: "a", tools: ["shell"], match: "x", message: "m", allow_from: ["~/projects/deployer"] })
   expect(hitIds(opts, "shell", sh("x"), FOO)).toEqual(["a"])
-  expect(hitIds(opts, "shell", sh("x"), h("dev/deployer"))).toEqual([])
-  expect(hitIds(opts, "shell", sh("x"), h("dev/deployer/lib"))).toEqual([])
-  expect(hitIds(opts, "shell", sh("x"), h("dev/deployer-ui"))).toEqual(["a"])
+  expect(hitIds(opts, "shell", sh("x"), h("projects/deployer"))).toEqual([])
+  expect(hitIds(opts, "shell", sh("x"), h("projects/deployer/lib"))).toEqual([])
+  expect(hitIds(opts, "shell", sh("x"), h("projects/deployer-ui"))).toEqual(["a"])
 })
 
 test("on restricts the inspected fields", () => {
@@ -442,20 +442,20 @@ test("before hook: refuse rules throw ruleText, warn-only configs register the a
 })
 
 test("before hook: guards still apply first and rules apply to non-file tools", async () => {
-  const hooks = await boot({ guards: [{ owner: "~/dev/infra", paths: ["~/dev/infra"] }], rules: [{ id: "r", tools: ["webfetch"], match: "evil", message: "m" }] })
-  await expect(hooks.before!(ev("edit", { path: h("dev/infra/x"), oldString: "a", newString: "b" }))).rejects.toThrow("owned by the project at")
+  const hooks = await boot({ guards: [{ owner: "~/projects/infra", paths: ["~/projects/infra"] }], rules: [{ id: "r", tools: ["webfetch"], match: "evil", message: "m" }] })
+  await expect(hooks.before!(ev("edit", { path: h("projects/infra/x"), oldString: "a", newString: "b" }))).rejects.toThrow("owned by the project at")
   await expect(hooks.before!(ev("webfetch", { url: "http://evil" }))).rejects.toThrow("rule `r` refused `webfetch`")
   await expect(hooks.before!(ev("webfetch", { url: "http://good" }))).resolves.toBeUndefined()
 })
 
 test("before hook: a warn rule never throws", async () => {
   const hooks = await boot({ rules: [HOUSE[5]] })
-  await expect(hooks.before!(ev("edit", { path: h("dev/foo/compose.yaml"), oldString: "a", newString: "b" }))).resolves.toBeUndefined()
+  await expect(hooks.before!(ev("edit", { path: h("projects/foo/compose.yaml"), oldString: "a", newString: "b" }))).resolves.toBeUndefined()
 })
 
 test("after hook appends warnings to string, array and output-only results", async () => {
   const hooks = await boot({ rules: [HOUSE[5]] })
-  const input = { path: h("dev/foo/compose.yaml"), oldString: "a", newString: "b" }
+  const input = { path: h("projects/foo/compose.yaml"), oldString: "a", newString: "b" }
   const e1 = ev("edit", input, { status: "completed", result: { content: "edited" } })
   await hooks.after!(e1)
   expect(e1.result.content).toHaveLength(2)
@@ -503,11 +503,11 @@ test("house rule opencode-upgrade", () => {
 })
 
 test("house rule cf-zerotrust", () => {
-  refusedBy("cf-zerotrust", "shell", sh("ruby ~/dev/cf-zerotrust/sync.rb"))
-  refusedBy("cf-zerotrust", "shell", sh("cd ~/dev/cf-zerotrust && bundle exec ruby sync.rb"))
-  refusedBy("cf-zerotrust", "shell", sh("ruby sync.rb", "~/dev/cf-zerotrust"))
-  passes("shell", sh("cat ~/dev/cf-zerotrust/README.md"))
-  passes("shell", sh("ruby ~/dev/other/sync.rb"))
+  refusedBy("cf-zerotrust", "shell", sh("ruby ~/projects/cf-zerotrust/sync.rb"))
+  refusedBy("cf-zerotrust", "shell", sh("cd ~/projects/cf-zerotrust && bundle exec ruby sync.rb"))
+  refusedBy("cf-zerotrust", "shell", sh("ruby sync.rb", "~/projects/cf-zerotrust"))
+  passes("shell", sh("cat ~/projects/cf-zerotrust/README.md"))
+  passes("shell", sh("ruby ~/projects/other/sync.rb"))
 })
 
 test("house rule dot-local", () => {
@@ -525,7 +525,7 @@ test("house rule dot-local", () => {
 
 test("house rule commit-attribution", () => {
   refusedBy("commit-attribution", "shell", sh(`git commit -m "fix" -m "Co-Authored-By: Claude <noreply@anthropic.com>"`))
-  refusedBy("commit-attribution", "shell", sh(`git -C ~/dev/x commit -am 'x\n\n🤖 Generated with Claude Code'`))
+  refusedBy("commit-attribution", "shell", sh(`git -C ~/projects/x commit -am 'x\n\n🤖 Generated with Claude Code'`))
   passes("shell", sh(`git commit -m "fix login"`))
   passes("shell", sh("git log --grep=Co-Authored-By"))
 })
@@ -551,13 +551,13 @@ test("house rule compose-deployer", async () => {
     await hooks.after!(e)
     return Array.isArray(e.result.content) && e.result.content.some((b: any) => typeof b.text === "string" && b.text.includes("rule `compose-deployer`"))
   }
-  expect(await warned(FOO, h("dev/foo/compose.yaml"))).toBe(true)
-  expect(await warned(FOO, h("dev/foo/docker-compose.override.yml"))).toBe(true)
-  expect(await warned(h("dev/deployer"), h("dev/deployer/compose.yaml"))).toBe(false)
-  expect(await warned(h("dev/deployer"), h("dev/foo/compose.yaml"))).toBe(false)
-  expect(await warned(FOO, h("dev/foo/app.rb"))).toBe(false)
-  expect(decideRules(house, FOO, "edit", { path: h("dev/foo/compose.yaml"), oldString: "a", newString: "b" }).map((x) => x.rule.kind)).toEqual(["warn"])
+  expect(await warned(FOO, h("projects/foo/compose.yaml"))).toBe(true)
+  expect(await warned(FOO, h("projects/foo/docker-compose.override.yml"))).toBe(true)
+  expect(await warned(h("projects/deployer"), h("projects/deployer/compose.yaml"))).toBe(false)
+  expect(await warned(h("projects/deployer"), h("projects/foo/compose.yaml"))).toBe(false)
+  expect(await warned(FOO, h("projects/foo/app.rb"))).toBe(false)
+  expect(decideRules(house, FOO, "edit", { path: h("projects/foo/compose.yaml"), oldString: "a", newString: "b" }).map((x) => x.rule.kind)).toEqual(["warn"])
   // the patch form carries its paths in the patch text, one per line
-  const patchText = `*** Begin Patch\n*** Update File: ${h("dev/foo/docker-compose.yml")}\n@@\n-a\n+b\n*** End Patch`
+  const patchText = `*** Begin Patch\n*** Update File: ${h("projects/foo/docker-compose.yml")}\n@@\n-a\n+b\n*** End Patch`
   expect(hitIds(house, "patch", { patchText })).toEqual(["compose-deployer"])
 })

@@ -10,8 +10,8 @@ All options live in the plugin's `plugins[]` entry in `opencode.jsonc`:
       "options": {
         "guards": [
           {
-            "owner": "~/dev/infra",
-            "paths": ["~/dev/infra", "~/dev/dns", "~/dev/proxy"],
+            "owner": "~/projects/infra",
+            "paths": ["~/projects/infra", "~/projects/dns", "~/projects/proxy"],
             "message": "Infra is changed only from {owner}. Describe what you need to the user instead."
           }
         ],
@@ -80,7 +80,7 @@ a guard refuses never reaches the rules.
   "except": ["/^rc\\.local$/"],  // optional
   "on": ["path"],                // optional
   "message": "…",                // required
-  "allow_from": ["~/dev/x"],     // optional
+  "allow_from": ["~/projects/x"],     // optional
   "unless_turn_tool": "question", // optional
   "unless_turn_tool_match": { … } // optional, exclusive with unless_turn_tool (see below)
 }
@@ -233,7 +233,7 @@ tools; `rc.local` is a file name, not a host, so `except` lets it pass.
   "tools": ["edit", "write", "patch"],
   "on": ["path"],
   "match": ["/(^|\\/)(docker-)?compose[\\w.-]*\\.ya?ml$/m"],
-  "allow_from": ["~/dev/infra"],
+  "allow_from": ["~/projects/infra"],
   "message": "If this service is managed by the service orchestrator, change it through its API instead."
 }
 ```
